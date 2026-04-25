@@ -42,6 +42,10 @@ DNS-over-HTTPS сейчас хранится и валидируется как 
 
 Если fork получит достаточный отклик и обратную связь, я планирую купить Apple Developer подписку и продолжить работу над полноценным переключением DoH-профилей через корректную macOS-подпись и системную интеграцию.
 
+## Скачать
+
+Актуальный DMG доступен в GitHub Releases. Старые версии не публикуются.
+
 ## Сборка
 
 Проект можно собрать локально через Xcode. Для публичного распространения потребуется корректная подпись Developer ID и notarization.
@@ -92,6 +96,10 @@ DNS-over-HTTPS is stored as part of each user profile and validated as an HTTPS 
 Important: the current DNS application path uses macOS `networksetup`, which applies classic DNS servers. `networksetup` does not configure encrypted DNS/DoH system profiles. Therefore, this app currently stores and displays the DoH URL but applies the IPv4 DNS servers only.
 
 If this fork gets enough interest and feedback, I plan to buy an Apple Developer subscription and continue the work toward fully working DoH profile switching with the proper macOS signing and system integration flow.
+
+## Download
+
+The current DMG is available from GitHub Releases. Older builds are not published.
 
 ## Build From Source
 
