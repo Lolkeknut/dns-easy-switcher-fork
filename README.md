@@ -28,7 +28,7 @@ DNS Easy Switcher Fork — модифицированная macOS-утилита
   - DNS-over-HTTPS URL
 - Пользовательские профили отображаются сразу в основном меню.
 - Обычный клик по иконке включает или выключает выбранный пользовательский профиль.
-- Долгое нажатие по иконке открывает меню.
+- Нажатие двумя пальцами / secondary click по иконке открывает меню.
 - Иконка в menu bar меняется в зависимости от состояния DNS.
 - При выключении DNS override приложение возвращает DNS в automatic/default режим.
 - Добавлен privileged helper: после установки/подтверждения helper-а DNS можно переключать без повторного запроса прав администратора.
@@ -72,7 +72,7 @@ DNS-over-HTTPS сейчас хранится и валидируется как 
   - filled circle when DNS override is enabled
   - normal network icon when DNS override is disabled
 - Single click toggles the selected user profile on/off.
-- Long press opens the menu.
+- Two-finger click / secondary click opens the menu.
 - Resets DNS back to automatic/default when the override is disabled.
 - Includes DNS speed testing and DNS cache flushing.
 
@@ -146,7 +146,7 @@ hdiutil create -volname "DNS Easy Switcher" -srcfolder "$DMG_STAGING" -ov -forma
 - Added validation for IPv4 DNS addresses and DNS-over-HTTPS URLs.
 - Added direct profile display in the menu bar menu.
 - Added single-click toggle for the selected user profile.
-- Added long-press menu opening.
+- Menu opens with two-finger click / secondary click on the menu bar icon.
 - Added dynamic menu bar icon state.
 - Added privileged helper support to avoid repeated administrator prompts.
 - Kept DoH honest: stored and validated, but not applied through `networksetup`.
