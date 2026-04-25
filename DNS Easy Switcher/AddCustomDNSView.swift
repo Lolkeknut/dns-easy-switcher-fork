@@ -10,10 +10,10 @@ import SwiftData
 
 struct AddCustomDNSView: View {
     @State private var name: String = ""
-    @State private var primaryDNS: String = ""
-    @State private var secondaryDNS: String = ""
-    @State private var tertiaryDNS: String = ""
-    @State private var quaternaryDNS: String = ""
+    @State private var primaryIPv4: String = ""
+    @State private var secondaryIPv4: String = ""
+    @State private var dnsOverHttps: String = ""
+    @State private var validationErrors: [DNSProfileValidationError] = []
     var onComplete: (CustomDNSServer?) -> Void
     
     var body: some View {
@@ -21,21 +21,27 @@ struct AddCustomDNSView: View {
             TextField("Name (e.g. Work DNS)", text: $name)
                 .textFieldStyle(.roundedBorder)
             
-            TextField("Primary DNS (e.g. 8.8.8.8 or 127.0.0.1:5353)", text: $primaryDNS)
+            TextField("Primary IPv4 (e.g. 8.8.8.8)", text: $primaryIPv4)
                 .textFieldStyle(.roundedBorder)
-                .help("Use comma to add multiple addresses. For custom ports on IPv4, add colon and port number (e.g., 127.0.0.1:5353)")
+                .help("Enter a plain IPv4 address.")
 
-            TextField("Secondary DNS (optional)", text: $secondaryDNS)
+            TextField("Secondary IPv4 (e.g. 8.8.4.4)", text: $secondaryIPv4)
                 .textFieldStyle(.roundedBorder)
-                .help("Use comma to add multiple addresses. For custom ports on IPv4, add colon and port number (e.g., 127.0.0.1:5353)")
-            
-            TextField("Third DNS (IPv6 or IPv4, optional)", text: $tertiaryDNS)
+                .help("Enter a plain IPv4 address.")
+
+            TextField("DNS-over-HTTPS URL (e.g. https://dns.google/dns-query)", text: $dnsOverHttps)
                 .textFieldStyle(.roundedBorder)
-                .help("Tip: bracket IPv6 if adding a port, e.g., [2001:4860:4860::8888]:5353")
-            
-            TextField("Fourth DNS (IPv6 or IPv4, optional)", text: $quaternaryDNS)
-                .textFieldStyle(.roundedBorder)
-                .help("Use comma to add multiple IPv6 entries if needed")
+                .help("Enter an HTTPS URL for this profile's DoH resolver.")
+
+            if !validationErrors.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(validationErrors.map(\.localizedDescription), id: \.self) { message in
+                        Text(message)
+                            .font(.caption)
+                            .foregroundColor(.red)
+                    }
+                }
+            }
             
             HStack {
                 Button("Cancel") {
@@ -46,21 +52,29 @@ struct AddCustomDNSView: View {
                 Spacer()
                 
                 Button("Add") {
-                    guard !name.isEmpty && !primaryDNS.isEmpty else { return }
-                    let server = CustomDNSServer(
+                    let snapshot = DNSProfileSnapshot(
                         name: name,
-                        primaryDNS: primaryDNS,
-                        secondaryDNS: secondaryDNS,
-                        tertiaryDNS: tertiaryDNS,
-                        quaternaryDNS: quaternaryDNS
+                        primaryIPv4: primaryIPv4,
+                        secondaryIPv4: secondaryIPv4,
+                        dnsOverHttps: dnsOverHttps
+                    )
+                    let errors = DNSProfileValidator.validationErrors(for: snapshot)
+                    validationErrors = errors
+                    guard errors.isEmpty else { return }
+
+                    let normalized = DNSProfileValidator.normalized(snapshot)
+                    let server = CustomDNSServer(
+                        name: normalized.name,
+                        primaryIPv4: normalized.primaryIPv4,
+                        secondaryIPv4: normalized.secondaryIPv4,
+                        dnsOverHttps: normalized.dnsOverHttps
                     )
                     onComplete(server)
                 }
                 .keyboardShortcut(.return)
-                .disabled(name.isEmpty || primaryDNS.isEmpty)
             }
         }
         .padding()
-        .frame(width: 360)
+        .frame(width: 420)
     }
 }

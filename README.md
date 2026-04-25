@@ -1,104 +1,112 @@
 # DNS Easy Switcher
 
-A simple macOS menu bar app that allows you to quickly switch between different DNS providers (or add custom ones).
+A modified macOS menu bar utility for switching DNS profiles quickly.
+
+This project is based on [`glinford/dns-easy-switcher`](https://github.com/glinford/dns-easy-switcher) and keeps the original MIT license.
 
 ![Screenshot of DNS Easy Switcher](screenshot.png)
 
-![downloads](https://img.shields.io/github/downloads/glinford/dns-easy-switcher/total)
+## What It Does
 
-## Features
+- Switches DNS from the macOS menu bar.
+- Supports built-in DNS providers:
+  - Cloudflare
+  - Quad9
+  - AdGuard
+  - GetFlix
+- Supports user DNS profiles with linked settings:
+  - profile name
+  - primary IPv4 DNS
+  - secondary IPv4 DNS
+  - DNS-over-HTTPS URL
+- Shows user profiles directly in the main menu.
+- Uses a menu bar icon state:
+  - filled circle when DNS override is enabled
+  - normal network icon when DNS override is disabled
+- Single click toggles the selected user profile on/off.
+- Long press opens the menu.
+- Resets DNS back to automatic/default when the override is disabled.
+- Includes DNS speed testing and DNS cache flushing.
 
-- Easy switching between popular DNS providers:
-  - Cloudflare DNS (1.1.1.1)
-  - Quad9 DNS (9.9.9.9)
-  - AdGuard DNS (94.140.14.14)
-  - GetFlix DNS (with list of all locations)
-- Disable DNS Overrides (DHCP-Provided DNS)
-- Add and manage your own custom DNS servers
-- Test DNS speed to find the fastest provider
-- Flush DNS Cache
-- Touch ID authentication for DNS changes
-- Native macOS menu bar integration
-- Persists your settings between app launches
-- IPv4 and IPv6 support
+## Privileged Helper
+
+This version adds a privileged helper so DNS changes do not need to request administrator permission every time.
+
+The intended flow is:
+
+1. Install or approve the helper once.
+2. The app communicates with the helper through XPC.
+3. The helper runs `networksetup` as root.
+4. Future DNS changes happen without repeated admin prompts.
+
+If the helper is not installed or macOS requires approval, the menu shows the helper status and an action button. The app keeps a fallback path through the old administrator prompt so DNS switching still works even before the helper is active.
+
+## DNS-over-HTTPS Status
+
+DNS-over-HTTPS is stored as part of each user profile and validated as an HTTPS URL.
+
+Important: the current DNS application path uses macOS `networksetup`, which applies classic DNS servers. `networksetup` does not configure encrypted DNS/DoH system profiles. Therefore, this app currently stores and displays the DoH URL but applies the IPv4 DNS servers only.
+
+If this fork gets enough interest and feedback, I plan to buy an Apple Developer subscription and continue the work toward fully working DoH profile switching with the proper macOS signing and system integration flow.
 
 ## Installation
 
-### Using Homebrew (Recommended)
+1. Download the latest `.dmg` from Releases.
+2. Mount the DMG.
+3. Drag `DNS Easy Switcher.app` to `/Applications`.
+4. Launch the app.
+5. Approve or install the privileged helper when prompted or from the app menu.
 
-Install DNS Easy Switcher with Homebrew using these commands:
+Since this is distributed outside the Mac App Store, macOS may show a Gatekeeper warning on first launch. If the app is not notarized, use right-click → Open for the first launch.
+
+## Build From Source
+
+Requirements:
+
+- macOS 14.0 or later
+- Xcode 15 or later
+
+Build:
 
 ```bash
-brew tap glinford/tap
-brew install --cask dns-easy-switcher
+xcodebuild \
+  -project "DNS Easy Switcher.xcodeproj" \
+  -scheme "DNS Easy Switcher" \
+  -configuration Debug \
+  -derivedDataPath build/DerivedData \
+  CODE_SIGNING_ALLOWED=NO \
+  build
 ```
 
-To update to the latest version when available:
+Create a local DMG:
 
 ```bash
-brew upgrade --cask dns-easy-switcher
+APP_PATH="dist/DNS Easy Switcher.app"
+DMG_STAGING="build/dmg-staging"
+DMG_PATH="dist/DNS Easy Switcher.dmg"
+
+rm -rf "$DMG_STAGING" "$DMG_PATH"
+mkdir -p "$DMG_STAGING"
+ditto "$APP_PATH" "$DMG_STAGING/DNS Easy Switcher.app"
+ln -s /Applications "$DMG_STAGING/Applications"
+hdiutil create -volname "DNS Easy Switcher" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG_PATH"
 ```
 
-### Manual Installation
+## Release Notes For This Modified Version
 
-1. Download the latest release from the [Releases](../../releases) page
-2. Mount the DMG file
-3. Drag DNS Easy Switcher to your Applications folder
-4. Launch DNS Easy Switcher from Applications
-
-## First Launch
-
-Since DNS Easy Switcher is distributed outside the Mac App Store, macOS may show a security warning when you first launch it.
-
-To allow the app to run:
-
-1. Right-click (or Control-click) on DNS Easy Switcher in your Applications folder
-2. Select "Open" from the context menu
-3. Click "Open" in the dialog that appears
-4. Allow system extensions when prompted (required for DNS changes)
-
-![settings](settings.png)
-
-## Important Note
-
-Due to macOS security requirements, administrator privileges are required each time you switch DNS settings. If you have a Touch ID-enabled Mac, you can now use Touch ID instead of password entry for authentication.
-
-## Requirements
-
-- macOS 14.0 (Sonoma) or later
-- Administrator privileges (required for changing DNS settings)
-- Touch ID compatible Mac (for Touch ID authentication feature)
-
-## Tested Configurations
-
-| macOS Version | Status |
-|--------------|--------|
-| Sonoma 14.5 | ✅ |
-
-## Building from Source
-
-1. Clone the repository:
-```bash
-git clone https://github.com/glinford/dns-easy-switcher.git
-```
-2. Open the project in Xcode 15 or later
-3. Build and run the project
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## Acknowledgments
-
-- [Cloudflare DNS](https://1.1.1.1) for their public DNS service
-- [Quad9](https://quad9.net) for their secure DNS service
-- [AdGuard DNS](https://adguard-dns.io/en/welcome.html) for their privacy-focused DNS service with ad blocking capabilities
-- [GetFlix](https://www.getflix.com.au/setup/dns-servers/)
+- Added linked user DNS profiles with `primaryIPv4`, `secondaryIPv4`, and `dnsOverHttps`.
+- Added validation for IPv4 DNS addresses and DNS-over-HTTPS URLs.
+- Added direct profile display in the menu bar menu.
+- Added single-click toggle for the selected user profile.
+- Added long-press menu opening.
+- Added dynamic menu bar icon state.
+- Added privileged helper support to avoid repeated administrator prompts.
+- Kept DoH honest: stored and validated, but not applied through `networksetup`.
 
 ## Privacy
 
-DNS Easy Switcher does not collect any data. All settings are stored locally on your device.
+DNS Easy Switcher does not collect analytics or send app data to external services. Settings are stored locally on the Mac.
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE).

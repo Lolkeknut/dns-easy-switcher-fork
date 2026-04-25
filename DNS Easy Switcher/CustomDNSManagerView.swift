@@ -18,7 +18,7 @@ struct CustomDNSManagerView: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Manage Custom DNS")
+            Text("Manage DNS Profiles")
                 .font(.headline)
                 .padding(.bottom, 4)
             
@@ -30,8 +30,14 @@ struct CustomDNSManagerView: View {
                 List {
                     ForEach(customServers) { server in
                         HStack {
-                            Text(server.name)
-                                .lineLimit(1)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(server.name)
+                                    .lineLimit(1)
+                                Text(server.profileSummary)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(2)
+                            }
                             
                             Spacer()
                             
@@ -72,6 +78,6 @@ struct CustomDNSManagerView: View {
             .padding(.top, 8)
         }
         .padding()
-        .frame(width: 300)
+        .frame(width: 420)
     }
 }

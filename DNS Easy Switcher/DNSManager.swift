@@ -7,10 +7,10 @@
 
 import Foundation
 import AppKit
-import LocalAuthentication
 
 class DNSManager {
     static let shared = DNSManager()
+    private let privilegedHelper = PrivilegedHelperManager.shared
     
     let cloudflareServers = [
         "1.1.1.1",           // IPv4 Primary
@@ -91,61 +91,45 @@ class DNSManager {
         return activeServices.isEmpty ? [services.first].compactMap { $0 } : activeServices
     }
     
+    var privilegedHelperStatusSnapshot: PrivilegedHelperStatusSnapshot {
+        privilegedHelper.statusSnapshot
+    }
+
+    func preparePrivilegedHelperAtLaunch() {
+        privilegedHelper.prepareAtLaunch()
+    }
+
+    func installPrivilegedHelper(completion: @escaping (Bool, String) -> Void) {
+        privilegedHelper.register(completion: completion)
+    }
+
+    func openPrivilegedHelperApprovalSettings() {
+        privilegedHelper.openSystemSettingsForApproval()
+    }
+
     private func executeWithAuthentication(command: String, completion: @escaping (Bool) -> Void) {
-            let context = LAContext()
-            context.localizedReason = "DNS Easy Switcher needs to modify network settings"
-            
-            var error: NSError?
-            if context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) {
-                context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "DNS Easy Switcher needs to modify network settings") { success, error in
-                    if success {
-                        DispatchQueue.global(qos: .userInitiated).async {
-                            let task = Process()
-                            task.launchPath = "/bin/bash"
-                            task.arguments = ["-c", command]
-                            
-                            let pipe = Pipe()
-                            task.standardOutput = pipe
-                            
-                            do {
-                                try task.run()
-                                task.waitUntilExit()
-                                
-                                let success = task.terminationStatus == 0
-                                DispatchQueue.main.async { completion(success) }
-                            } catch {
-                                print("Failed to execute command: \(error)")
-                                DispatchQueue.main.async { completion(false) }
-                            }
-                        }
-                    } else {
-                        print("Authentication failed: \(error?.localizedDescription ?? "Unknown error")")
-                        DispatchQueue.main.async { completion(false) }
-                    }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let escapedCommand = command
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            let script = """
+            do shell script "\(escapedCommand)" with administrator privileges with prompt "DNS Easy Switcher needs to modify network settings"
+            """
+
+            var scriptError: NSDictionary?
+            if let scriptObject = NSAppleScript(source: script) {
+                _ = scriptObject.executeAndReturnError(&scriptError)
+                if scriptError == nil {
+                    DispatchQueue.main.async { completion(true) }
+                } else {
+                    print("AppleScript error: \(scriptError ?? ["error": "Unknown error"] as NSDictionary)")
+                    DispatchQueue.main.async { completion(false) }
                 }
             } else {
-                // Fall back to AppleScript for admin privileges
-                print("Local Authentication not available: \(error?.localizedDescription ?? "Unknown error")")
-                
-                DispatchQueue.global(qos: .userInitiated).async {
-                    let script = """
-                    do shell script "\(command)" with administrator privileges
-                    """
-                    
-                    var scriptError: NSDictionary?
-                    if let scriptObject = NSAppleScript(source: script) {
-                        if scriptObject.executeAndReturnError(&scriptError) != nil {
-                            DispatchQueue.main.async { completion(true) }
-                        } else {
-                            print("AppleScript error: \(scriptError ?? ["error": "Unknown error"] as NSDictionary)")
-                            DispatchQueue.main.async { completion(false) }
-                        }
-                    } else {
-                        DispatchQueue.main.async { completion(false) }
-                    }
-                }
+                DispatchQueue.main.async { completion(false) }
             }
         }
+    }
     
     func setPredefinedDNS(dnsServers: [String], completion: @escaping (Bool) -> Void) {
         let services = findActiveServices()
@@ -153,29 +137,8 @@ class DNSManager {
             completion(false)
             return
         }
-        
-        let dispatchGroup = DispatchGroup()
-        var allSucceeded = true
-        
-        for service in services {
-            dispatchGroup.enter()
-            
-            let dnsArgs = dnsServers.joined(separator: " ")
-            let dnsCommand = "/usr/sbin/networksetup -setdnsservers '\(service)' \(dnsArgs)"
-            let ipv6Command = "/usr/sbin/networksetup -setv6off '\(service)'; /usr/sbin/networksetup -setv6automatic '\(service)'"
-            let fullCommand = "\(dnsCommand); \(ipv6Command)"
-            
-            executeWithAuthentication(command: fullCommand) { success in
-                if !success {
-                    allSucceeded = false
-                }
-                dispatchGroup.leave()
-            }
-        }
-        
-        dispatchGroup.notify(queue: .main) {
-            completion(allSucceeded)
-        }
+
+        setStandardDNS(services: services, servers: dnsServers, completion: completion)
     }
         
     func setCustomDNS(servers rawServers: [String], completion: @escaping (Bool) -> Void) {
@@ -209,38 +172,76 @@ class DNSManager {
         
         // We'll use the existing executeWithAuthentication method which properly handles
         // authentication with Touch ID or admin password
-        let createDirCmd = "sudo mkdir -p /etc/resolver"
-        executeWithAuthentication(command: createDirCmd) { dirSuccess in
-            if !dirSuccess {
-                print("Failed to create resolver directory")
+        privilegedHelper.writeCustomResolver(content: resolverContent) { result in
+            if result.succeeded {
+                let standardServers = parsedServers.map { $0.address }
+                self.setStandardDNS(services: services, servers: standardServers, completion: completion)
+                return
+            }
+
+            guard result.shouldFallbackToAppleScript else {
+                print("Failed to write resolver configuration: \(result.message ?? "Unknown error")")
                 completion(false)
                 return
             }
-            
-            // Now write the resolver content
-            let writeFileCmd = "echo '\(resolverContent)' | sudo tee /etc/resolver/custom > /dev/null"
-            self.executeWithAuthentication(command: writeFileCmd) { fileSuccess in
-                if !fileSuccess {
-                    print("Failed to write resolver configuration")
+
+            let createDirCmd = "sudo mkdir -p /etc/resolver"
+            self.executeWithAuthentication(command: createDirCmd) { dirSuccess in
+                if !dirSuccess {
+                    print("Failed to create resolver directory")
                     completion(false)
                     return
                 }
-                
-                // Set permissions
-                let permCmd = "sudo chmod 644 /etc/resolver/custom"
-                self.executeWithAuthentication(command: permCmd) { permSuccess in
-                    if !permSuccess {
-                        print("Failed to set resolver file permissions")
+
+                // Now write the resolver content
+                let writeFileCmd = "printf %s \(self.shellQuoted(resolverContent)) | sudo tee /etc/resolver/custom > /dev/null"
+                self.executeWithAuthentication(command: writeFileCmd) { fileSuccess in
+                    if !fileSuccess {
+                        print("Failed to write resolver configuration")
                         completion(false)
                         return
                     }
-                    
-                    // Also set standard DNS servers to ensure proper resolution
-                    let standardServers = parsedServers.map { $0.address }
-                    self.setStandardDNS(services: services, servers: standardServers, completion: completion)
+
+                    // Set permissions
+                    let permCmd = "sudo chmod 644 /etc/resolver/custom"
+                    self.executeWithAuthentication(command: permCmd) { permSuccess in
+                        if !permSuccess {
+                            print("Failed to set resolver file permissions")
+                            completion(false)
+                            return
+                        }
+
+                        // Also set standard DNS servers to ensure proper resolution
+                        let standardServers = parsedServers.map { $0.address }
+                        self.setStandardDNS(services: services, servers: standardServers, completion: completion)
+                    }
                 }
             }
         }
+    }
+
+    func setDNSProfile(_ profile: DNSProfileSnapshot, completion: @escaping (Bool) -> Void) {
+        let normalized = DNSProfileValidator.normalized(profile)
+        let errors = DNSProfileValidator.validationErrors(for: normalized, requireDNSOverHTTPS: false)
+        guard errors.isEmpty else {
+            print("DNS profile '\(profile.name)' was not applied: \(errors.map(\.localizedDescription).joined(separator: " "))")
+            completion(false)
+            return
+        }
+
+        if normalized.dnsOverHttps.isEmpty {
+            print("DNS-over-HTTPS is not configured for profile '\(normalized.name)'. Applying IPv4 DNS only.")
+        } else {
+            print("DNS-over-HTTPS URL '\(normalized.dnsOverHttps)' is stored with profile '\(normalized.name)', but this app currently applies system DNS through networksetup, which does not configure encrypted DNS profiles. Applying IPv4 DNS only.")
+        }
+
+        let services = findActiveServices()
+        guard !services.isEmpty else {
+            completion(false)
+            return
+        }
+
+        setStandardDNS(services: services, servers: [normalized.primaryIPv4, normalized.secondaryIPv4], completion: completion)
     }
 
     private func createResolverContent(_ servers: [(address: String, port: Int?)]) -> String {
@@ -285,51 +286,91 @@ class DNSManager {
         return (trimmed, nil)
     }
 
-    func disableDNS(completion: @escaping (Bool) -> Void) {
+    func disableDNS(profileID: String? = nil, completion: @escaping (Bool) -> Void) {
         let services = findActiveServices()
         guard !services.isEmpty else {
             completion(false)
             return
         }
         
-        // Remove any custom resolver configuration
-        let removeResolverCmd = "sudo rm -f /etc/resolver/custom"
-        
-        executeWithAuthentication(command: removeResolverCmd) { _ in
-            // Continue with normal DNS reset regardless of resolver removal success
-            let dispatchGroup = DispatchGroup()
-            var allSucceeded = true
-            
-            for service in services {
-                dispatchGroup.enter()
-                
-                let command = "/usr/sbin/networksetup -setdnsservers '\(service)' empty"
-                
-                self.executeWithAuthentication(command: command) { success in
-                    if !success {
-                        allSucceeded = false
-                    }
-                    dispatchGroup.leave()
-                }
+        privilegedHelper.resetDNS(services: services) { result in
+            if result.succeeded {
+                completion(true)
+                return
             }
-            
-            dispatchGroup.notify(queue: .main) {
-                completion(allSucceeded)
+
+            guard result.shouldFallbackToAppleScript else {
+                print("Failed to disable DNS through privileged helper: \(result.message ?? "Unknown error")")
+                completion(false)
+                return
+            }
+
+            // Remove any custom resolver configuration
+            let removeResolverCmd = "sudo rm -f /etc/resolver/custom"
+
+            self.executeWithAuthentication(command: removeResolverCmd) { _ in
+                // Continue with normal DNS reset regardless of resolver removal success
+                let dispatchGroup = DispatchGroup()
+                var allSucceeded = true
+
+                for service in services {
+                    dispatchGroup.enter()
+
+                    let command = "/usr/sbin/networksetup -setdnsservers \(self.shellQuoted(service)) empty"
+
+                    self.executeWithAuthentication(command: command) { success in
+                        if !success {
+                            allSucceeded = false
+                        }
+                        dispatchGroup.leave()
+                    }
+                }
+
+                dispatchGroup.notify(queue: .main) {
+                    completion(allSucceeded)
+                }
             }
         }
     }
 
     // Helper method to set standard DNS settings
     private func setStandardDNS(services: [String], servers: [String], completion: @escaping (Bool) -> Void) {
+        let cleanedServers = servers
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        guard !cleanedServers.isEmpty else {
+            completion(false)
+            return
+        }
+
+        privilegedHelper.setDNS(servers: cleanedServers, services: services) { result in
+            if result.succeeded {
+                completion(true)
+                return
+            }
+
+            guard result.shouldFallbackToAppleScript else {
+                print("Failed to set DNS through privileged helper: \(result.message ?? "Unknown error")")
+                completion(false)
+                return
+            }
+
+            self.setStandardDNSWithAppleScript(services: services, servers: cleanedServers, completion: completion)
+        }
+    }
+
+    private func setStandardDNSWithAppleScript(services: [String], servers: [String], completion: @escaping (Bool) -> Void) {
         let dispatchGroup = DispatchGroup()
         var allSucceeded = true
         
         for service in services {
             dispatchGroup.enter()
             
-            let dnsArgs = servers.joined(separator: " ")
-            let dnsCommand = "/usr/sbin/networksetup -setdnsservers '\(service)' \(dnsArgs)"
-            let ipv6Command = "/usr/sbin/networksetup -setv6off '\(service)'; /usr/sbin/networksetup -setv6automatic '\(service)'"
+            let dnsArgs = servers.map(shellQuoted).joined(separator: " ")
+            let quotedService = shellQuoted(service)
+            let dnsCommand = "/usr/sbin/networksetup -setdnsservers \(quotedService) \(dnsArgs)"
+            let ipv6Command = "/usr/sbin/networksetup -setv6off \(quotedService); /usr/sbin/networksetup -setv6automatic \(quotedService)"
             let fullCommand = "\(dnsCommand); \(ipv6Command)"
             
             executeWithAuthentication(command: fullCommand) { success in
@@ -345,64 +386,35 @@ class DNSManager {
         }
     }
 
-    private func executePrivilegedCommand(arguments: [String]) -> Bool {
-        let services = findActiveServices()
-        guard !services.isEmpty else { return false }
-        
-        var success = true
-        
-        for service in services {
-            // Properly escape the arguments for AppleScript
-            let escapedArgs = arguments.map { arg in
-                return "\\\"" + arg.replacingOccurrences(of: "\\", with: "\\\\")
-                    .replacingOccurrences(of: "\"", with: "\\\"") + "\\\""
-            }.joined(separator: " ")
-            
-            // Combine IPv4 and IPv6 commands in a single script if we're setting DNS
-            let isSettingDNS = arguments[0] == "-setdnsservers"
-
-            let commandScript: String
-            if isSettingDNS {
-                // Combine DNS and IPv6 commands with semicolons in a single admin privilege request
-                let ipv6Script = "/usr/sbin/networksetup -setv6off '\(service)'; /usr/sbin/networksetup -setv6automatic '\(service)'"
-                commandScript = """
-                do shell script "/usr/sbin/networksetup \(escapedArgs); \(ipv6Script)" with administrator privileges with prompt "DNS Easy Switcher needs to modify network settings"
-                """
-            } else {
-                // For other commands, keep as is
-                commandScript = """
-                do shell script "/usr/sbin/networksetup \(escapedArgs)" with administrator privileges with prompt "DNS Easy Switcher needs to modify network settings"
-                """
-            }
-            
-            var error: NSDictionary?
-            if let scriptObject = NSAppleScript(source: commandScript) {
-                if scriptObject.executeAndReturnError(&error) == nil {
-                    if let error = error {
-                        print("Error executing privileged command: \(error)")
-                        success = false
-                    }
-                }
-            } else {
-                success = false
-            }
-        }
-        
-        return success
+    private func shellQuoted(_ value: String) -> String {
+        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
-    
+
     func clearDNSCache(completion: @escaping (Bool) -> Void) {
-        let flushCommand = "dscacheutil -flushcache"
-        
-        executeWithAuthentication(command: flushCommand) { success in
-            if success {
-                let restartCommand = "killall -HUP mDNSResponder 2>/dev/null || killall -HUP mdnsresponder 2>/dev/null || true"
-                
-                self.executeWithAuthentication(command: restartCommand) { _ in
-                    completion(success)
-                }
-            } else {
+        privilegedHelper.clearDNSCache { result in
+            if result.succeeded {
+                completion(true)
+                return
+            }
+
+            guard result.shouldFallbackToAppleScript else {
+                print("Failed to clear DNS cache through privileged helper: \(result.message ?? "Unknown error")")
                 completion(false)
+                return
+            }
+
+            let flushCommand = "dscacheutil -flushcache"
+
+            self.executeWithAuthentication(command: flushCommand) { success in
+                if success {
+                    let restartCommand = "killall -HUP mDNSResponder 2>/dev/null || killall -HUP mdnsresponder 2>/dev/null || true"
+
+                    self.executeWithAuthentication(command: restartCommand) { _ in
+                        completion(success)
+                    }
+                } else {
+                    completion(false)
+                }
             }
         }
     }

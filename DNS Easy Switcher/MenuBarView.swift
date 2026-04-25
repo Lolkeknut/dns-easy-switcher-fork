@@ -19,6 +19,9 @@ struct MenuBarView: View {
     @State private var aboutWindowController: CustomSheetWindowController?
     @State private var selectedServer: CustomDNSServer?
     @State private var windowController: CustomSheetWindowController?
+    @State private var helperStatus = DNSManager.shared.privilegedHelperStatusSnapshot
+    @State private var isInstallingHelper = false
+    @State private var helperInstallMessage: String?
     
     var body: some View {
         Group {
@@ -102,7 +105,7 @@ struct MenuBarView: View {
                     HStack {
                         Text("GetFlix DNS")
                         Spacer()
-                        if let activeLocation = dnsSettings.first?.activeGetFlixLocation {
+                        if dnsSettings.first?.activeGetFlixLocation != nil {
                             Circle()
                                 .fill(Color.green)
                                 .frame(width: 8, height: 8)
@@ -120,46 +123,62 @@ struct MenuBarView: View {
                 
                 Divider()
                 
-                // Custom DNS section
-                if !customServers.isEmpty {
-                    Menu {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("User Profiles")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        if isSpeedTesting {
+                            ProgressView()
+                                .scaleEffect(0.6)
+                                .frame(width: 12, height: 12)
+                        }
+                    }
+                    .padding(.horizontal)
+
+                    if customServers.isEmpty {
+                        Text("No user profiles")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal)
+                    } else {
                         ForEach(customServers) { server in
                             Button(action: {
                                 activateDNS(type: .custom(server))
                             }) {
-                                HStack {
-                                    Text(getCustomDNSLabelWithPing(server))
-                                    Spacer()
-                                    if dnsSettings.first?.activeCustomDNSID == server.id {
-                                        Image(systemName: "checkmark")
+                                HStack(spacing: 8) {
+                                    Image(systemName: isActiveProfile(server) ? "checkmark.circle.fill" : "circle")
+                                        .foregroundColor(isActiveProfile(server) ? .green : .secondary)
+                                        .frame(width: 18)
+
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(getCustomDNSLabelWithPing(server))
+                                            .fontWeight(isSelectedProfile(server) ? .semibold : .regular)
+                                        Text(server.profileSummary)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                            .lineLimit(2)
                                     }
+
+                                    Spacer()
                                 }
+                                .frame(maxWidth: .infinity, alignment: .leading)
                             }
-                        }
-                    } label: {
-                        HStack {
-                            Text("Custom DNS")
-                            Spacer()
-                            if dnsSettings.first?.activeCustomDNSID != nil {
-                                Circle()
-                                    .fill(Color.green)
-                                    .frame(width: 8, height: 8)
-                            }
-                            if isSpeedTesting {
-                                ProgressView()
-                                    .scaleEffect(0.6)
-                                    .frame(width: 12, height: 12)
-                                    .padding(.trailing, 4)
-                            }
+                            .buttonStyle(.plain)
+                            .padding(.horizontal)
+                            .padding(.vertical, 4)
+                            .disabled(isUpdating || isSpeedTesting)
                         }
                     }
-                    .padding(.horizontal)
-                    .disabled(isUpdating || isSpeedTesting)
-                    
+                }
+
+                if !customServers.isEmpty {
                     Button(action: {
                         showManageCustomDNSSheet()
                     }) {
-                        Text("Manage Custom DNS")
+                        Text("Manage DNS Profiles")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.plain)
@@ -171,23 +190,25 @@ struct MenuBarView: View {
                 Button(action: {
                     showAddCustomDNSSheet()
                 }) {
-                    Text("Add Custom DNS")
+                    Text("Add DNS Profile")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
                 .padding(.horizontal)
                 .padding(.vertical, 5)
                 .disabled(isSpeedTesting)
-                
+
+                privilegedHelperSection
+
                 Divider()
                 
                 Button("Disable DNS Override") {
                     if !isUpdating && !isSpeedTesting {
                         isUpdating = true
-                        DNSManager.shared.disableDNS { success in
+                        DNSManager.shared.disableDNS(profileID: dnsSettings.first?.selectedProfileID) { success in
                             if success {
                                 Task { @MainActor in
-                                    updateSettings(type: .none)
+                                    deactivateSelectedProfile()
                                 }
                             }
                             isUpdating = false
@@ -252,7 +273,52 @@ struct MenuBarView: View {
         }
         .onAppear {
             ensureSettingsExist()
+            refreshPrivilegedHelperStatus()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .privilegedHelperStatusDidChange)) { _ in
+            refreshPrivilegedHelperStatus()
+        }
+    }
+
+    private var privilegedHelperSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: helperStatus.isEnabled ? "lock.open.fill" : "lock.fill")
+                    .foregroundColor(helperStatus.isEnabled ? .green : .secondary)
+                    .frame(width: 18)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(helperStatus.title)
+                        .font(.caption)
+                    Text(helperInstallMessage ?? helperStatus.detail)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(3)
+                }
+
+                Spacer()
+
+                if isInstallingHelper {
+                    ProgressView()
+                        .scaleEffect(0.65)
+                        .frame(width: 14, height: 14)
+                }
+            }
+
+            if !helperStatus.isEnabled {
+                Button(helperStatus.requiresApproval ? "Open System Settings" : "Install Helper") {
+                    if helperStatus.requiresApproval {
+                        DNSManager.shared.openPrivilegedHelperApprovalSettings()
+                    } else {
+                        installPrivilegedHelper()
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(isInstallingHelper)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 4)
     }
     
     // Helper methods for getting ping results
@@ -298,6 +364,14 @@ struct MenuBarView: View {
         
         return server.name
     }
+
+    private func isSelectedProfile(_ server: CustomDNSServer) -> Bool {
+        dnsSettings.first?.selectedProfileID == server.id
+    }
+
+    private func isActiveProfile(_ server: CustomDNSServer) -> Bool {
+        dnsSettings.first?.activeCustomDNSID == server.id && dnsSettings.first?.isSelectedProfileEnabled == true
+    }
     
     // Run DNS speed test
     private func runSpeedTest() {
@@ -324,7 +398,7 @@ struct MenuBarView: View {
             windowController = nil
         }
         
-        windowController = CustomSheetWindowController(view: addView, title: "Add Custom DNS")
+        windowController = CustomSheetWindowController(view: addView, title: "Add DNS Profile")
         windowController?.window?.level = .floating
         windowController?.showWindow(nil)
         
@@ -350,12 +424,12 @@ struct MenuBarView: View {
                 try? modelContext.save()
                 
                 // If this was the active server, disable DNS
-                if dnsSettings.first?.activeCustomDNSID == server.id {
+                if dnsSettings.first?.activeCustomDNSID == server.id || dnsSettings.first?.selectedCustomDNSID == server.id {
                     isUpdating = true
-                    DNSManager.shared.disableDNS { success in
+                    DNSManager.shared.disableDNS(profileID: server.id) { success in
                         if success {
                             Task { @MainActor in
-                                updateSettings(type: .none)
+                                clearDeletedProfile(server.id)
                             }
                         }
                         isUpdating = false
@@ -375,7 +449,7 @@ struct MenuBarView: View {
             windowController = nil
         })
         
-        windowController = CustomSheetWindowController(view: manageView, title: "Manage Custom DNS")
+        windowController = CustomSheetWindowController(view: manageView, title: "Manage DNS Profiles")
         windowController?.window?.level = .floating
         windowController?.showWindow(nil)
         
@@ -409,14 +483,13 @@ struct MenuBarView: View {
             if let updatedServer = updatedServer {
                 // Update existing server properties
                 server.name = updatedServer.name
-                server.primaryDNS = updatedServer.primaryDNS
-                server.secondaryDNS = updatedServer.secondaryDNS
-                server.tertiaryDNS = updatedServer.tertiaryDNS
-                server.quaternaryDNS = updatedServer.quaternaryDNS
+                server.primaryIPv4 = updatedServer.primaryIPv4
+                server.secondaryIPv4 = updatedServer.secondaryIPv4
+                server.dnsOverHttps = updatedServer.dnsOverHttps
                 try? modelContext.save()
                 
                 // If this was the active server, update DNS settings
-                if dnsSettings.first?.activeCustomDNSID == server.id {
+                if dnsSettings.first?.activeCustomDNSID == server.id && dnsSettings.first?.isSelectedProfileEnabled == true {
                     activateDNS(type: .custom(server))
                 }
             }
@@ -427,7 +500,7 @@ struct MenuBarView: View {
         
         windowController?.close()
         
-        windowController = CustomSheetWindowController(view: editView, title: "Edit Custom DNS")
+        windowController = CustomSheetWindowController(view: editView, title: "Edit DNS Profile")
         windowController?.window?.level = .floating
         windowController?.showWindow(nil)
         
@@ -503,7 +576,7 @@ struct MenuBarView: View {
                 isUpdating = false
             }
         case .custom(let server):
-            DNSManager.shared.setCustomDNS(servers: server.dnsEntries) { success in
+            DNSManager.shared.setDNSProfile(server.profileSnapshot) { success in
                 if success {
                     Task { @MainActor in
                         updateSettings(type: type)
@@ -542,11 +615,53 @@ struct MenuBarView: View {
             
             if case .custom(let server) = type {
                 settings.activeCustomDNSID = server.id
+                settings.selectedCustomDNSID = server.id
+                settings.isSelectedProfileEnabled = true
             } else {
                 settings.activeCustomDNSID = nil
+                settings.isSelectedProfileEnabled = false
             }
             
             settings.timestamp = Date()
+            try? modelContext.save()
+            NotificationCenter.default.post(
+                name: .dnsSettingsDidChange,
+                object: nil,
+                userInfo: ["isEnabled": settings.isDNSOverrideEnabled]
+            )
+        }
+    }
+
+    private func deactivateSelectedProfile() {
+        if let settings = dnsSettings.first {
+            settings.isCloudflareEnabled = false
+            settings.isQuad9Enabled = false
+            settings.isAdGuardEnabled = false
+            settings.activeGetFlixLocation = nil
+            settings.activeCustomDNSID = nil
+            settings.isSelectedProfileEnabled = false
+            settings.timestamp = Date()
+            try? modelContext.save()
+            NotificationCenter.default.post(name: .dnsSettingsDidChange, object: nil, userInfo: ["isEnabled": false])
+        }
+    }
+
+    private func clearDeletedProfile(_ profileID: String) {
+        if let settings = dnsSettings.first {
+            settings.isCloudflareEnabled = false
+            settings.isQuad9Enabled = false
+            settings.isAdGuardEnabled = false
+            settings.activeGetFlixLocation = nil
+            if settings.activeCustomDNSID == profileID {
+                settings.activeCustomDNSID = nil
+            }
+            if settings.selectedCustomDNSID == profileID {
+                settings.selectedCustomDNSID = nil
+            }
+            settings.isSelectedProfileEnabled = false
+            settings.timestamp = Date()
+            try? modelContext.save()
+            NotificationCenter.default.post(name: .dnsSettingsDidChange, object: nil, userInfo: ["isEnabled": false])
         }
     }
     
@@ -565,6 +680,21 @@ struct MenuBarView: View {
                     self.isUpdating = false
                 }
             }
+        }
+    }
+
+    private func refreshPrivilegedHelperStatus() {
+        helperStatus = DNSManager.shared.privilegedHelperStatusSnapshot
+    }
+
+    private func installPrivilegedHelper() {
+        isInstallingHelper = true
+        helperInstallMessage = nil
+
+        DNSManager.shared.installPrivilegedHelper { success, message in
+            helperInstallMessage = success ? "Helper installed. DNS changes will no longer ask for admin rights." : message
+            refreshPrivilegedHelperStatus()
+            isInstallingHelper = false
         }
     }
 }

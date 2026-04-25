@@ -43,15 +43,12 @@ struct DNS_Easy_SwitcherApp: App {
             Color.clear
                 .frame(width: 0, height: 0)
                 .hidden()
+                .onAppear {
+                    menuBarController.configure(modelContainer: modelContainer)
+                }
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 0, height: 0)
         .modelContainer(modelContainer)
-        
-        MenuBarExtra("DNS Switcher", systemImage: "network") {
-            MenuBarView()
-                .environment(\.modelContext, modelContainer.mainContext)
-                .frame(width: 300)
-        }
     }
 }

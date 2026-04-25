@@ -12,25 +12,22 @@ import SwiftData
 final class CustomDNSServer: Identifiable {
     var id: String
     var name: String
-    var primaryDNS: String
-    var secondaryDNS: String
-    var tertiaryDNS: String?
-    var quaternaryDNS: String?
+    @Attribute(originalName: "primaryDNS") var primaryIPv4: String
+    @Attribute(originalName: "secondaryDNS") var secondaryIPv4: String
+    var dnsOverHttps: String = ""
     var timestamp: Date
     
     init(id: String = UUID().uuidString,
          name: String,
-         primaryDNS: String,
-         secondaryDNS: String,
-         tertiaryDNS: String? = nil,
-         quaternaryDNS: String? = nil,
+         primaryIPv4: String,
+         secondaryIPv4: String,
+         dnsOverHttps: String = "",
          timestamp: Date = Date()) {
         self.id = id
         self.name = name
-        self.primaryDNS = primaryDNS
-        self.secondaryDNS = secondaryDNS
-        self.tertiaryDNS = tertiaryDNS
-        self.quaternaryDNS = quaternaryDNS
+        self.primaryIPv4 = primaryIPv4
+        self.secondaryIPv4 = secondaryIPv4
+        self.dnsOverHttps = dnsOverHttps
         self.timestamp = timestamp
     }
 }
@@ -41,6 +38,9 @@ final class DNSSettings {
     var isCloudflareEnabled: Bool
     var isQuad9Enabled: Bool
     var activeCustomDNSID: String?
+    var selectedCustomDNSID: String?
+    var isSelectedProfileEnabled: Bool = false
+    var doubleClickMenuBarIconTogglesSelectedProfile: Bool = false
     var timestamp: Date
     var activeGetFlixLocation: String?
     var isAdGuardEnabled: Bool?
@@ -49,6 +49,9 @@ final class DNSSettings {
          isCloudflareEnabled: Bool = false,
          isQuad9Enabled: Bool = false,
          activeCustomDNSID: String? = nil,
+         selectedCustomDNSID: String? = nil,
+         isSelectedProfileEnabled: Bool = false,
+         doubleClickMenuBarIconTogglesSelectedProfile: Bool = false,
          timestamp: Date = Date(),
          isAdGuardEnabled: Bool? = false,
          activeGetFlixLocation: String? = nil) {
@@ -56,20 +59,58 @@ final class DNSSettings {
         self.isCloudflareEnabled = isCloudflareEnabled
         self.isQuad9Enabled = isQuad9Enabled
         self.activeCustomDNSID = activeCustomDNSID
+        self.selectedCustomDNSID = selectedCustomDNSID
+        self.isSelectedProfileEnabled = isSelectedProfileEnabled
+        self.doubleClickMenuBarIconTogglesSelectedProfile = doubleClickMenuBarIconTogglesSelectedProfile
         self.timestamp = timestamp
         self.isAdGuardEnabled = isAdGuardEnabled
+        self.activeGetFlixLocation = activeGetFlixLocation
     }
 }
 
 extension CustomDNSServer {
-    /// Returns all user-entered DNS entries, supporting comma-separated values per field.
+    var profileSnapshot: DNSProfileSnapshot {
+        DNSProfileSnapshot(
+            id: id,
+            name: name,
+            primaryIPv4: primaryIPv4,
+            secondaryIPv4: secondaryIPv4,
+            dnsOverHttps: dnsOverHttps
+        )
+    }
+
+    /// Returns this profile's IPv4 DNS entries as one linked configuration.
     var dnsEntries: [String] {
-        [primaryDNS, secondaryDNS, tertiaryDNS ?? "", quaternaryDNS ?? ""]
-            .flatMap { entry in
-                entry
-                    .split(separator: ",")
-                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            }
+        [primaryIPv4, secondaryIPv4]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+    }
+
+    var profileSummary: String {
+        let dohSummary = dnsOverHttps.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "DoH not set" : "DoH configured"
+        return "\(primaryIPv4), \(secondaryIPv4) | \(dohSummary)"
+    }
+}
+
+extension DNSSettings {
+    var selectedProfileID: String? {
+        selectedCustomDNSID ?? activeCustomDNSID
+    }
+
+    var isDNSOverrideEnabled: Bool {
+        isCloudflareEnabled
+            || isQuad9Enabled
+            || (isAdGuardEnabled ?? false)
+            || activeGetFlixLocation != nil
+            || isSelectedProfileEnabled
+    }
+
+    var profileSelectionState: DNSProfileSelectionState {
+        DNSProfileSelectionState(
+            selectedProfileID: selectedProfileID,
+            activeProfileID: activeCustomDNSID,
+            isSelectedProfileEnabled: isSelectedProfileEnabled,
+            doubleClickMenuBarIconTogglesSelectedProfile: doubleClickMenuBarIconTogglesSelectedProfile
+        )
     }
 }
