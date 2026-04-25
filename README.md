@@ -42,15 +42,11 @@ DNS-over-HTTPS сейчас хранится и валидируется как 
 
 Если fork получит достаточный отклик и обратную связь, я планирую купить Apple Developer подписку и продолжить работу над полноценным переключением DoH-профилей через корректную macOS-подпись и системную интеграцию.
 
-## Установка
+## Сборка
 
-1. Скачайте `.dmg` из Releases.
-2. Откройте DMG.
-3. Перетащите `DNS Easy Switcher.app` в `/Applications`.
-4. Запустите приложение.
-5. Установите или подтвердите privileged helper, если macOS попросит это сделать.
+Проект можно собрать локально через Xcode. Для публичного распространения потребуется корректная подпись Developer ID и notarization.
 
-Сборка сейчас подписана ad-hoc и не notarized, поэтому при первом запуске macOS может потребовать открыть приложение через right-click → Open.
+Локальная ad-hoc сборка может требовать запуск через right-click → Open.
 
 </details>
 
@@ -97,16 +93,6 @@ Important: the current DNS application path uses macOS `networksetup`, which app
 
 If this fork gets enough interest and feedback, I plan to buy an Apple Developer subscription and continue the work toward fully working DoH profile switching with the proper macOS signing and system integration flow.
 
-## Installation
-
-1. Download the latest `.dmg` from Releases.
-2. Mount the DMG.
-3. Drag `DNS Easy Switcher.app` to `/Applications`.
-4. Launch the app.
-5. Approve or install the privileged helper when prompted or from the app menu.
-
-Since this is distributed outside the Mac App Store, macOS may show a Gatekeeper warning on first launch. If the app is not notarized, use right-click → Open for the first launch.
-
 ## Build From Source
 
 Requirements:
@@ -139,17 +125,6 @@ ditto "$APP_PATH" "$DMG_STAGING/DNS Easy Switcher.app"
 ln -s /Applications "$DMG_STAGING/Applications"
 hdiutil create -volname "DNS Easy Switcher" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG_PATH"
 ```
-
-## Release Notes For This Modified Version
-
-- Added linked user DNS profiles with `primaryIPv4`, `secondaryIPv4`, and `dnsOverHttps`.
-- Added validation for IPv4 DNS addresses and DNS-over-HTTPS URLs.
-- Added direct profile display in the menu bar menu.
-- Added single-click toggle for the selected user profile.
-- Menu opens with two-finger click / secondary click on the menu bar icon.
-- Added dynamic menu bar icon state.
-- Added privileged helper support to avoid repeated administrator prompts.
-- Kept DoH honest: stored and validated, but not applied through `networksetup`.
 
 ## Privacy
 
