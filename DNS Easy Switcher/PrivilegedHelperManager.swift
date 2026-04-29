@@ -40,6 +40,31 @@ struct PrivilegedHelperStatusSnapshot: Equatable {
     var detail: String
     var isEnabled: Bool
     var requiresApproval: Bool
+    var isBusy: Bool = false
+    var actionTitle: String? = nil
+}
+
+private enum PrivilegedHelperRuntimeState: Equatable {
+    case idle
+    case registering
+    case checking
+    case repairing
+    case ready
+    case unavailable(String)
+
+    var isReady: Bool {
+        if case .ready = self { return true }
+        return false
+    }
+
+    var isBusy: Bool {
+        switch self {
+        case .registering, .checking, .repairing:
+            return true
+        case .idle, .ready, .unavailable:
+            return false
+        }
+    }
 }
 
 final class PrivilegedHelperManager {
@@ -51,32 +76,88 @@ final class PrivilegedHelperManager {
 
     private let service = SMAppService.daemon(plistName: PrivilegedHelperManager.plistName)
     private let registrationQueue = DispatchQueue(label: "com.linfordsoftware.dnseasyswitcher.helper.registration")
+    private let runtimeLock = NSLock()
+    private var runtimeState: PrivilegedHelperRuntimeState = .idle
+    private var didStartAutomaticPreparation = false
+    private var isRegistrationInProgress = false
     private var isRepairingRegistration = false
 
     private init() {}
 
     var statusSnapshot: PrivilegedHelperStatusSnapshot {
+        let runtimeState = currentRuntimeState()
+
+        switch runtimeState {
+        case .registering:
+            return PrivilegedHelperStatusSnapshot(
+                title: "Installing privileged helper",
+                detail: "macOS is registering the helper. Approve it if System Settings asks.",
+                isEnabled: false,
+                requiresApproval: false,
+                isBusy: true
+            )
+        case .checking:
+            return PrivilegedHelperStatusSnapshot(
+                title: "Checking privileged helper",
+                detail: "Verifying that the installed helper can answer XPC requests.",
+                isEnabled: false,
+                requiresApproval: false,
+                isBusy: true
+            )
+        case .repairing:
+            return PrivilegedHelperStatusSnapshot(
+                title: "Repairing privileged helper",
+                detail: "The registered helper did not answer, so the app is re-registering it.",
+                isEnabled: false,
+                requiresApproval: false,
+                isBusy: true
+            )
+        case .ready:
+            if serviceIsEnabled {
+                return PrivilegedHelperStatusSnapshot(
+                    title: "Privileged helper ready",
+                    detail: "DNS changes will run without repeated administrator prompts.",
+                    isEnabled: true,
+                    requiresApproval: false
+                )
+            }
+        case .unavailable(let message):
+            if serviceIsEnabled {
+                return PrivilegedHelperStatusSnapshot(
+                    title: "Privileged helper not responding",
+                    detail: message,
+                    isEnabled: false,
+                    requiresApproval: false,
+                    actionTitle: "Repair Helper"
+                )
+            }
+        case .idle:
+            break
+        }
+
         switch service.status {
         case .enabled:
             return PrivilegedHelperStatusSnapshot(
                 title: "Privileged helper installed",
-                detail: "DNS changes will run without repeated administrator prompts.",
-                isEnabled: true,
+                detail: "Waiting for the launch check to verify the helper before DNS changes are enabled.",
+                isEnabled: false,
                 requiresApproval: false
             )
         case .requiresApproval:
             return PrivilegedHelperStatusSnapshot(
                 title: "Privileged helper needs approval",
-                detail: "Approve DNS Easy Switcher in System Settings to stop repeated administrator prompts.",
+                detail: "Approve DNS Easy Switcher in System Settings. After approval, DNS changes run without repeated prompts.",
                 isEnabled: false,
-                requiresApproval: true
+                requiresApproval: true,
+                actionTitle: "Open System Settings"
             )
         case .notRegistered:
             return PrivilegedHelperStatusSnapshot(
                 title: "Privileged helper not installed",
-                detail: "Install it once to avoid administrator prompts on every DNS change.",
+                detail: "The app will install it once at launch so DNS changes do not ask every time.",
                 isEnabled: false,
-                requiresApproval: false
+                requiresApproval: false,
+                actionTitle: "Install Helper"
             )
         case .notFound:
             return PrivilegedHelperStatusSnapshot(
@@ -95,10 +176,66 @@ final class PrivilegedHelperManager {
         }
     }
 
+    private var serviceIsEnabled: Bool {
+        if case .enabled = service.status { return true }
+        return false
+    }
+
+    private func currentRuntimeState() -> PrivilegedHelperRuntimeState {
+        runtimeLock.lock()
+        defer { runtimeLock.unlock() }
+        return runtimeState
+    }
+
+    private func setRuntimeState(_ state: PrivilegedHelperRuntimeState) {
+        runtimeLock.lock()
+        let didChange = runtimeState != state
+        runtimeState = state
+        runtimeLock.unlock()
+
+        if didChange {
+            notifyStatusChanged()
+        }
+    }
+
+    private func markAutomaticPreparationStartedIfNeeded() -> Bool {
+        runtimeLock.lock()
+        defer { runtimeLock.unlock() }
+
+        guard PrivilegedHelperReadinessPolicy.shouldStartAutomaticPreparation(
+            hasAlreadyStarted: didStartAutomaticPreparation
+        ) else {
+            return false
+        }
+
+        didStartAutomaticPreparation = true
+        return true
+    }
+
+    private func beginRegistrationIfNeeded() -> Bool {
+        runtimeLock.lock()
+        defer { runtimeLock.unlock() }
+
+        guard !isRegistrationInProgress else { return false }
+        isRegistrationInProgress = true
+        return true
+    }
+
+    private func endRegistration() {
+        runtimeLock.lock()
+        isRegistrationInProgress = false
+        runtimeLock.unlock()
+    }
+
     func prepareAtLaunch() {
+        guard markAutomaticPreparationStartedIfNeeded() else {
+            refreshAfterExternalStatusChange()
+            return
+        }
+
         let snapshot = statusSnapshot
         let launchState = PrivilegedHelperLaunchState(
-            isEnabled: snapshot.isEnabled,
+            isEnabled: serviceIsEnabled,
             requiresApproval: snapshot.requiresApproval
         )
 
@@ -114,15 +251,7 @@ final class PrivilegedHelperManager {
             break
         }
 
-        register { success, message in
-            let currentStatus = PrivilegedHelperLaunchState(
-                isEnabled: self.statusSnapshot.isEnabled,
-                requiresApproval: self.statusSnapshot.requiresApproval
-            )
-            if PrivilegedHelperLaunchPolicy.shouldOpenApprovalAfterRegistration(currentStatus) {
-                self.openSystemSettingsForApproval()
-            }
-
+        register(openApprovalIfRequired: true) { success, message in
             if !success {
                 print("Privileged helper was not registered at launch: \(message)")
             }
@@ -130,9 +259,11 @@ final class PrivilegedHelperManager {
     }
 
     private func verifyEnabledHelperAtLaunch() {
-        helperVersion { [weak self] result in
+        verifyEnabledHelper { [weak self] result in
             guard let self else { return }
-            guard !result.succeeded else { return }
+            if result.succeeded {
+                return
+            }
 
             print("Privileged helper health check failed at launch: \(result.message ?? "Unknown error")")
             repairRegistrationAfterHealthCheck()
@@ -143,6 +274,7 @@ final class PrivilegedHelperManager {
         registrationQueue.async {
             guard !self.isRepairingRegistration else { return }
             self.isRepairingRegistration = true
+            self.setRuntimeState(.repairing)
             defer { self.isRepairingRegistration = false }
 
             do {
@@ -154,36 +286,131 @@ final class PrivilegedHelperManager {
             do {
                 try self.service.register()
             } catch {
-                print("Privileged helper repair registration failed: \(error.localizedDescription)")
+                let message = error.localizedDescription
+                self.setRuntimeState(.unavailable(message))
+                print("Privileged helper repair registration failed: \(message)")
+                return
             }
 
-            DispatchQueue.main.async {
-                NotificationCenter.default.post(name: .privilegedHelperStatusDidChange, object: nil)
-
-                let snapshot = self.statusSnapshot
-                if snapshot.requiresApproval || !snapshot.isEnabled {
+            switch self.service.status {
+            case .enabled:
+                self.verifyEnabledHelper { result in
+                    if !result.succeeded {
+                        let message = result.message ?? "The privileged helper did not respond after repair."
+                        self.setRuntimeState(.unavailable(message))
+                        print("Privileged helper repair health check failed: \(message)")
+                    }
+                }
+            case .requiresApproval:
+                self.setRuntimeState(.idle)
+                DispatchQueue.main.async {
                     self.openSystemSettingsForApproval()
                 }
+            default:
+                self.setRuntimeState(.unavailable(self.statusSnapshot.detail))
             }
         }
     }
 
     func register(completion: @escaping (Bool, String) -> Void) {
-        DispatchQueue.global(qos: .userInitiated).async {
+        register(openApprovalIfRequired: true, completion: completion)
+    }
+
+    func refreshAfterExternalStatusChange() {
+        switch service.status {
+        case .enabled:
+            let state = currentRuntimeState()
+            if state == .idle {
+                verifyEnabledHelper { _ in }
+            }
+        case .requiresApproval, .notRegistered, .notFound:
+            if currentRuntimeState() != .idle {
+                setRuntimeState(.idle)
+            }
+        @unknown default:
+            break
+        }
+    }
+
+    private func register(openApprovalIfRequired: Bool, completion: @escaping (Bool, String) -> Void) {
+        registrationQueue.async {
+            if self.serviceIsEnabled {
+                self.verifyEnabledHelper { result in
+                    if result.succeeded {
+                        completion(true, self.statusSnapshot.detail)
+                    } else {
+                        self.repairRegistrationAfterHealthCheck()
+                        completion(false, result.message ?? self.statusSnapshot.detail)
+                    }
+                }
+                return
+            }
+
+            guard self.beginRegistrationIfNeeded() else {
+                DispatchQueue.main.async {
+                    completion(false, "Privileged helper registration is already in progress.")
+                }
+                return
+            }
+
+            self.setRuntimeState(.registering)
+            defer { self.endRegistration() }
+
             do {
                 try self.service.register()
-                let snapshot = self.statusSnapshot
-                let success = snapshot.isEnabled
-                DispatchQueue.main.async {
-                    NotificationCenter.default.post(name: .privilegedHelperStatusDidChange, object: nil)
-                    completion(success, snapshot.detail)
-                }
             } catch {
+                let message = error.localizedDescription
+                self.setRuntimeState(.unavailable(message))
                 DispatchQueue.main.async {
-                    NotificationCenter.default.post(name: .privilegedHelperStatusDidChange, object: nil)
-                    completion(false, error.localizedDescription)
+                    completion(false, message)
+                }
+                return
+            }
+
+            switch self.service.status {
+            case .enabled:
+                self.verifyEnabledHelper { result in
+                    completion(result.succeeded, result.message ?? self.statusSnapshot.detail)
+                }
+            case .requiresApproval:
+                self.setRuntimeState(.idle)
+                if openApprovalIfRequired {
+                    DispatchQueue.main.async {
+                        self.openSystemSettingsForApproval()
+                    }
+                }
+                DispatchQueue.main.async {
+                    completion(false, self.statusSnapshot.detail)
+                }
+            default:
+                self.setRuntimeState(.idle)
+                DispatchQueue.main.async {
+                    completion(false, self.statusSnapshot.detail)
                 }
             }
+        }
+    }
+
+    private func verifyEnabledHelper(completion: @escaping (PrivilegedHelperCommandResult) -> Void) {
+        guard serviceIsEnabled else {
+            setRuntimeState(.idle)
+            DispatchQueue.main.async {
+                completion(.unavailable(self.statusSnapshot.detail))
+            }
+            return
+        }
+
+        setRuntimeState(.checking)
+        helperVersion { [weak self] result in
+            guard let self else { return }
+
+            if result.succeeded {
+                self.setRuntimeState(.ready)
+            } else {
+                self.setRuntimeState(.unavailable(result.message ?? "The privileged helper did not respond."))
+            }
+
+            completion(result)
         }
     }
 
@@ -192,7 +419,7 @@ final class PrivilegedHelperManager {
     }
 
     func helperVersion(completion: @escaping (PrivilegedHelperCommandResult) -> Void) {
-        withHelperProxy { proxy, finish in
+        withHelperProxy(requireReady: false) { proxy, finish in
             proxy.helperVersion { version in
                 finish(.success(version))
             }
@@ -252,10 +479,19 @@ final class PrivilegedHelperManager {
     }
 
     private func withHelperProxy(
+        requireReady: Bool = true,
         operation: @escaping (PrivilegedDNSHelperProtocol, @escaping (PrivilegedHelperCommandResult) -> Void) -> Void,
         completion: @escaping (PrivilegedHelperCommandResult) -> Void
     ) {
-        guard statusSnapshot.isEnabled else {
+        guard serviceIsEnabled else {
+            completion(.unavailable(statusSnapshot.detail))
+            return
+        }
+
+        if requireReady, !PrivilegedHelperReadinessPolicy.canRunDNSMutation(
+            isServiceEnabled: true,
+            isXPCVerified: currentRuntimeState().isReady
+        ) {
             completion(.unavailable(statusSnapshot.detail))
             return
         }

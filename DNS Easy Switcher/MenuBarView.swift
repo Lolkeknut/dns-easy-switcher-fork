@@ -298,7 +298,7 @@ struct MenuBarView: View {
 
                 Spacer()
 
-                if isInstallingHelper {
+                if isInstallingHelper || helperStatus.isBusy {
                     ProgressView()
                         .scaleEffect(0.65)
                         .frame(width: 14, height: 14)
@@ -306,7 +306,7 @@ struct MenuBarView: View {
             }
 
             if !helperStatus.isEnabled {
-                Button(helperStatus.requiresApproval ? "Open System Settings" : "Install Helper") {
+                Button(helperStatus.actionTitle ?? (helperStatus.requiresApproval ? "Open System Settings" : "Install Helper")) {
                     if helperStatus.requiresApproval {
                         DNSManager.shared.openPrivilegedHelperApprovalSettings()
                     } else {
@@ -314,7 +314,7 @@ struct MenuBarView: View {
                     }
                 }
                 .buttonStyle(.bordered)
-                .disabled(isInstallingHelper)
+                .disabled(isInstallingHelper || helperStatus.isBusy)
             }
         }
         .padding(.horizontal)
@@ -395,8 +395,11 @@ struct MenuBarView: View {
             if let newServer = newServer {
                 modelContext.insert(newServer)
                 try? modelContext.save()
-                // Automatically activate the new DNS
-                activateDNS(type: .custom(newServer))
+                if DNSManager.shared.privilegedHelperStatusSnapshot.isEnabled {
+                    activateDNS(type: .custom(newServer))
+                } else {
+                    selectProfile(newServer)
+                }
             }
             windowController?.close()
             windowController = nil
@@ -549,6 +552,13 @@ struct MenuBarView: View {
     }
     
     private func activateDNS(type: DNSType) {
+        guard type == .none || DNSManager.shared.privilegedHelperStatusSnapshot.isEnabled else {
+            DNSManager.shared.refreshPrivilegedHelperStatus()
+            refreshPrivilegedHelperStatus()
+            print("DNS action ignored: privileged helper is not ready.")
+            return
+        }
+
         isUpdating = true
         
         switch type {
@@ -598,6 +608,8 @@ struct MenuBarView: View {
                     }
                     isUpdating = false
                 }
+            } else {
+                isUpdating = false
             }
         case .none:
             updateSettings(type: type)
@@ -626,6 +638,19 @@ struct MenuBarView: View {
                 settings.isSelectedProfileEnabled = false
             }
             
+            settings.timestamp = Date()
+            try? modelContext.save()
+            NotificationCenter.default.post(
+                name: .dnsSettingsDidChange,
+                object: nil,
+                userInfo: ["isEnabled": settings.isDNSOverrideEnabled]
+            )
+        }
+    }
+
+    private func selectProfile(_ server: CustomDNSServer) {
+        if let settings = dnsSettings.first {
+            settings.selectedCustomDNSID = server.id
             settings.timestamp = Date()
             try? modelContext.save()
             NotificationCenter.default.post(
@@ -678,6 +703,13 @@ struct MenuBarView: View {
     
     private func clearDNSCache() {
         if !isUpdating && !isSpeedTesting {
+            guard DNSManager.shared.privilegedHelperStatusSnapshot.isEnabled else {
+                DNSManager.shared.refreshPrivilegedHelperStatus()
+                refreshPrivilegedHelperStatus()
+                print("Clear DNS cache ignored: privileged helper is not ready.")
+                return
+            }
+
             isUpdating = true
             DNSManager.shared.clearDNSCache { success in
                 DispatchQueue.main.async {
@@ -688,6 +720,7 @@ struct MenuBarView: View {
     }
 
     private func refreshPrivilegedHelperStatus() {
+        DNSManager.shared.refreshPrivilegedHelperStatus()
         helperStatus = DNSManager.shared.privilegedHelperStatusSnapshot
     }
 
@@ -696,7 +729,7 @@ struct MenuBarView: View {
         helperInstallMessage = nil
 
         DNSManager.shared.installPrivilegedHelper { success, message in
-            helperInstallMessage = success ? "Helper installed. DNS changes will no longer ask for admin rights." : message
+            helperInstallMessage = success ? "Helper verified. DNS changes will not ask again during normal switching." : message
             refreshPrivilegedHelperStatus()
             isInstallingHelper = false
         }

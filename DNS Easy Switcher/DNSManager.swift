@@ -98,6 +98,10 @@ class DNSManager {
         privilegedHelper.prepareAtLaunch()
     }
 
+    func refreshPrivilegedHelperStatus() {
+        privilegedHelper.refreshAfterExternalStatusChange()
+    }
+
     func installPrivilegedHelper(completion: @escaping (Bool, String) -> Void) {
         privilegedHelper.register(completion: completion)
     }

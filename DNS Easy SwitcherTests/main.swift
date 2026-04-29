@@ -148,6 +148,23 @@ let tests: [(String, () throws -> Void)] = [
         )
         try expectEqual(MenuBarStatusItemPolicy.toggleDecision(for: missingProfile), .noAction, "missing profile toggle")
     }),
+    ("menu bar click does not toggle before helper is ready", {
+        let state = DNSProfileSelectionState(
+            selectedProfileID: "profile-1",
+            activeProfileID: nil,
+            isSelectedProfileEnabled: false
+        )
+
+        try expectEqual(
+            MenuBarStatusItemPolicy.mouseUpDecision(
+                state: state,
+                didOpenMenuFromLongPress: false,
+                isHelperReady: false
+            ),
+            .noAction,
+            "helper readiness should gate status item toggles"
+        )
+    }),
     ("long press opens menu and suppresses click toggle", {
         let state = DNSProfileSelectionState(
             selectedProfileID: "profile-1",
@@ -198,6 +215,30 @@ let tests: [(String, () throws -> Void)] = [
         try expect(
             !PrivilegedHelperOperationTimeoutPolicy.didTimeOut(elapsed: PrivilegedHelperOperationTimeoutPolicy.defaultTimeout - 0.1),
             "operation should not time out before threshold"
+        )
+    }),
+    ("privileged helper readiness requires service and XPC verification", {
+        try expect(
+            PrivilegedHelperReadinessPolicy.canRunDNSMutation(isServiceEnabled: true, isXPCVerified: true),
+            "verified enabled service should allow DNS changes"
+        )
+        try expect(
+            !PrivilegedHelperReadinessPolicy.canRunDNSMutation(isServiceEnabled: true, isXPCVerified: false),
+            "service status alone should not allow DNS changes"
+        )
+        try expect(
+            !PrivilegedHelperReadinessPolicy.canRunDNSMutation(isServiceEnabled: false, isXPCVerified: true),
+            "XPC verification without enabled service should not allow DNS changes"
+        )
+    }),
+    ("automatic helper preparation starts once per launch", {
+        try expect(
+            PrivilegedHelperReadinessPolicy.shouldStartAutomaticPreparation(hasAlreadyStarted: false),
+            "first launch preparation should start"
+        )
+        try expect(
+            !PrivilegedHelperReadinessPolicy.shouldStartAutomaticPreparation(hasAlreadyStarted: true),
+            "automatic launch preparation should be idempotent"
         )
     })
 ]

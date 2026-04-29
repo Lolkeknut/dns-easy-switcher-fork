@@ -101,7 +101,8 @@ class MenuBarController: NSObject, ObservableObject {
             guard let settings = currentSettings() else { return }
             let mouseDecision = MenuBarStatusItemPolicy.mouseUpDecision(
                 state: settings.profileSelectionState,
-                didOpenMenuFromLongPress: didOpenMenuFromLongPress
+                didOpenMenuFromLongPress: didOpenMenuFromLongPress,
+                isHelperReady: DNSManager.shared.privilegedHelperStatusSnapshot.isEnabled
             )
             didOpenMenuFromLongPress = false
 
@@ -143,7 +144,7 @@ class MenuBarController: NSObject, ObservableObject {
         guard let modelContainer else { return }
 
         guard DNSManager.shared.privilegedHelperStatusSnapshot.isEnabled else {
-            DNSManager.shared.preparePrivilegedHelperAtLaunch()
+            DNSManager.shared.refreshPrivilegedHelperStatus()
             print("Menu bar click ignored: privileged helper is not ready.")
             return
         }

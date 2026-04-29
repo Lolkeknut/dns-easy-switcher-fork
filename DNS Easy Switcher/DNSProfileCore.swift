@@ -214,8 +214,13 @@ public enum DNSStatusItemMouseUpDecision: Equatable {
 public struct MenuBarStatusItemPolicy {
     public static let longPressThreshold: TimeInterval = 0.45
 
-    public static func mouseUpDecision(state: DNSProfileSelectionState, didOpenMenuFromLongPress: Bool) -> DNSStatusItemMouseUpDecision {
+    public static func mouseUpDecision(
+        state: DNSProfileSelectionState,
+        didOpenMenuFromLongPress: Bool,
+        isHelperReady: Bool = true
+    ) -> DNSStatusItemMouseUpDecision {
         guard !didOpenMenuFromLongPress else { return .noAction }
+        guard isHelperReady else { return .noAction }
         guard let selectedProfileID = state.selectedProfileID, !selectedProfileID.isEmpty else { return .noAction }
         return .toggleSelectedProfile
     }
@@ -282,5 +287,15 @@ public struct PrivilegedHelperOperationTimeoutPolicy {
 
     public static func didTimeOut(elapsed: TimeInterval, timeout: TimeInterval = defaultTimeout) -> Bool {
         elapsed >= timeout
+    }
+}
+
+public struct PrivilegedHelperReadinessPolicy {
+    public static func canRunDNSMutation(isServiceEnabled: Bool, isXPCVerified: Bool) -> Bool {
+        isServiceEnabled && isXPCVerified
+    }
+
+    public static func shouldStartAutomaticPreparation(hasAlreadyStarted: Bool) -> Bool {
+        !hasAlreadyStarted
     }
 }
