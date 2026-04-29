@@ -36,7 +36,7 @@ struct MenuBarView: View {
                     }
                 ))
                 .padding(.horizontal)
-                .disabled(isUpdating || isSpeedTesting)
+                .disabled(dnsActionsDisabled)
                 .overlay(alignment: .trailing) {
                     if isSpeedTesting {
                         ProgressView()
@@ -56,7 +56,7 @@ struct MenuBarView: View {
                     }
                 ))
                 .padding(.horizontal)
-                .disabled(isUpdating || isSpeedTesting)
+                .disabled(dnsActionsDisabled)
                 .overlay(alignment: .trailing) {
                     if isSpeedTesting {
                         ProgressView()
@@ -76,7 +76,7 @@ struct MenuBarView: View {
                     }
                 ))
                 .padding(.horizontal)
-                .disabled(isUpdating || isSpeedTesting)
+                .disabled(dnsActionsDisabled)
                 .overlay(alignment: .trailing) {
                     if isSpeedTesting {
                         ProgressView()
@@ -119,7 +119,7 @@ struct MenuBarView: View {
                     }
                 }
                 .padding(.horizontal)
-                .disabled(isUpdating || isSpeedTesting)
+                .disabled(dnsActionsDisabled)
                 
                 Divider()
                 
@@ -169,7 +169,7 @@ struct MenuBarView: View {
                             .buttonStyle(.plain)
                             .padding(.horizontal)
                             .padding(.vertical, 4)
-                            .disabled(isUpdating || isSpeedTesting)
+                            .disabled(dnsActionsDisabled)
                         }
                     }
                 }
@@ -216,7 +216,7 @@ struct MenuBarView: View {
                     }
                 }
                 .padding(.vertical, 5)
-                .disabled(isUpdating || isSpeedTesting)
+                .disabled(dnsActionsDisabled)
                 
                 // Speed Test Button
                 Button(action: {
@@ -255,7 +255,7 @@ struct MenuBarView: View {
                 .buttonStyle(.bordered)
                 .padding(.horizontal)
                 .padding(.vertical, 5)
-                .disabled(isUpdating || isSpeedTesting)
+                .disabled(dnsActionsDisabled)
                 
                 Divider()
 
@@ -319,6 +319,10 @@ struct MenuBarView: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 4)
+    }
+
+    private var dnsActionsDisabled: Bool {
+        isUpdating || isSpeedTesting || !helperStatus.isEnabled
     }
     
     // Helper methods for getting ping results

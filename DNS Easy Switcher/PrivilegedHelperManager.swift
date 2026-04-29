@@ -20,7 +20,7 @@ enum PrivilegedHelperCommandResult: Equatable {
         return false
     }
 
-    var shouldFallbackToAppleScript: Bool {
+    var isUnavailable: Bool {
         if case .unavailable = self { return true }
         return false
     }
@@ -50,6 +50,8 @@ final class PrivilegedHelperManager {
     static let operationTimeout = PrivilegedHelperOperationTimeoutPolicy.defaultTimeout
 
     private let service = SMAppService.daemon(plistName: PrivilegedHelperManager.plistName)
+    private let registrationQueue = DispatchQueue(label: "com.linfordsoftware.dnseasyswitcher.helper.registration")
+    private var isRepairingRegistration = false
 
     private init() {}
 
@@ -102,6 +104,7 @@ final class PrivilegedHelperManager {
 
         switch PrivilegedHelperLaunchPolicy.action(for: launchState) {
         case .none:
+            verifyEnabledHelperAtLaunch()
             return
         case .openApprovalSettings:
             notifyStatusChanged()
@@ -122,6 +125,45 @@ final class PrivilegedHelperManager {
 
             if !success {
                 print("Privileged helper was not registered at launch: \(message)")
+            }
+        }
+    }
+
+    private func verifyEnabledHelperAtLaunch() {
+        helperVersion { [weak self] result in
+            guard let self else { return }
+            guard !result.succeeded else { return }
+
+            print("Privileged helper health check failed at launch: \(result.message ?? "Unknown error")")
+            repairRegistrationAfterHealthCheck()
+        }
+    }
+
+    private func repairRegistrationAfterHealthCheck() {
+        registrationQueue.async {
+            guard !self.isRepairingRegistration else { return }
+            self.isRepairingRegistration = true
+            defer { self.isRepairingRegistration = false }
+
+            do {
+                try self.service.unregister()
+            } catch {
+                print("Privileged helper unregister during repair failed: \(error.localizedDescription)")
+            }
+
+            do {
+                try self.service.register()
+            } catch {
+                print("Privileged helper repair registration failed: \(error.localizedDescription)")
+            }
+
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .privilegedHelperStatusDidChange, object: nil)
+
+                let snapshot = self.statusSnapshot
+                if snapshot.requiresApproval || !snapshot.isEnabled {
+                    self.openSystemSettingsForApproval()
+                }
             }
         }
     }

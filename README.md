@@ -32,6 +32,7 @@ DNS Easy Switcher Fork — модифицированная macOS-утилита
 - Иконка в menu bar меняется в зависимости от состояния DNS.
 - При выключении DNS override приложение возвращает DNS в automatic/default режим.
 - Добавлен privileged helper: после установки/подтверждения helper-а DNS можно переключать без повторного запроса прав администратора.
+- Действия, которые меняют DNS, требуют approved helper и не используют повторный AppleScript/admin prompt.
 - Есть тест скорости DNS и очистка DNS cache.
 
 ## Статус DNS-over-HTTPS
@@ -87,7 +88,7 @@ The intended flow is:
 3. The helper runs `networksetup` as root.
 4. Future DNS changes happen without repeated admin prompts.
 
-If the helper is not installed or macOS requires approval, the menu shows the helper status and an action button. The app keeps a fallback path through the old administrator prompt so DNS switching still works even before the helper is active.
+If the helper is not installed or macOS requires approval, the menu shows the helper status and an action button. DNS-changing actions require the helper and are disabled until it is approved, so the app does not repeatedly ask for administrator permission during normal switching.
 
 ## DNS-over-HTTPS Status
 

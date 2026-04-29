@@ -142,6 +142,12 @@ class MenuBarController: NSObject, ObservableObject {
         guard !isTogglingSelectedProfile else { return }
         guard let modelContainer else { return }
 
+        guard DNSManager.shared.privilegedHelperStatusSnapshot.isEnabled else {
+            DNSManager.shared.preparePrivilegedHelperAtLaunch()
+            print("Menu bar click ignored: privileged helper is not ready.")
+            return
+        }
+
         let context = modelContainer.mainContext
         isTogglingSelectedProfile = true
 
