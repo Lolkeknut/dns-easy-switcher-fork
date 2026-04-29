@@ -47,6 +47,7 @@ final class PrivilegedHelperManager {
 
     static let plistName = "com.linfordsoftware.dnseasyswitcher.helper.plist"
     static let machServiceName = "com.linfordsoftware.dnseasyswitcher.helper"
+    static let operationTimeout = PrivilegedHelperOperationTimeoutPolicy.defaultTimeout
 
     private let service = SMAppService.daemon(plistName: PrivilegedHelperManager.plistName)
 
@@ -94,9 +95,31 @@ final class PrivilegedHelperManager {
 
     func prepareAtLaunch() {
         let snapshot = statusSnapshot
-        guard !snapshot.isEnabled, !snapshot.requiresApproval else { return }
+        let launchState = PrivilegedHelperLaunchState(
+            isEnabled: snapshot.isEnabled,
+            requiresApproval: snapshot.requiresApproval
+        )
+
+        switch PrivilegedHelperLaunchPolicy.action(for: launchState) {
+        case .none:
+            return
+        case .openApprovalSettings:
+            notifyStatusChanged()
+            openSystemSettingsForApproval()
+            return
+        case .register:
+            break
+        }
 
         register { success, message in
+            let currentStatus = PrivilegedHelperLaunchState(
+                isEnabled: self.statusSnapshot.isEnabled,
+                requiresApproval: self.statusSnapshot.requiresApproval
+            )
+            if PrivilegedHelperLaunchPolicy.shouldOpenApprovalAfterRegistration(currentStatus) {
+                self.openSystemSettingsForApproval()
+            }
+
             if !success {
                 print("Privileged helper was not registered at launch: \(message)")
             }
@@ -201,13 +224,18 @@ final class PrivilegedHelperManager {
         )
         connection.remoteObjectInterface = NSXPCInterface(with: PrivilegedDNSHelperProtocol.self)
 
+        let finishQueue = DispatchQueue(label: "com.linfordsoftware.dnseasyswitcher.helper.finish")
         var didComplete = false
+        var timeoutWorkItem: DispatchWorkItem?
         let finish: (PrivilegedHelperCommandResult) -> Void = { result in
-            guard !didComplete else { return }
-            didComplete = true
-            connection.invalidate()
-            DispatchQueue.main.async {
-                completion(result)
+            finishQueue.async {
+                guard !didComplete else { return }
+                didComplete = true
+                timeoutWorkItem?.cancel()
+                connection.invalidate()
+                DispatchQueue.main.async {
+                    completion(result)
+                }
             }
         }
 
@@ -220,6 +248,15 @@ final class PrivilegedHelperManager {
 
         connection.resume()
 
+        let workItem = DispatchWorkItem {
+            finish(.unavailable("Timed out while waiting for the privileged helper."))
+        }
+        timeoutWorkItem = workItem
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(
+            deadline: .now() + Self.operationTimeout,
+            execute: workItem
+        )
+
         guard let proxy = connection.remoteObjectProxyWithErrorHandler({ error in
             finish(.unavailable(error.localizedDescription))
         }) as? PrivilegedDNSHelperProtocol else {
@@ -228,5 +265,11 @@ final class PrivilegedHelperManager {
         }
 
         operation(proxy, finish)
+    }
+
+    private func notifyStatusChanged() {
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .privilegedHelperStatusDidChange, object: nil)
+        }
     }
 }

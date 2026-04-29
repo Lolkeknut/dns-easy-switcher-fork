@@ -166,6 +166,39 @@ let tests: [(String, () throws -> Void)] = [
     ("status icon reflects DNS enabled state", {
         try expectEqual(DNSStatusIconPolicy.symbolName(isEnabled: true), "circle.fill", "enabled icon")
         try expectEqual(DNSStatusIconPolicy.symbolName(isEnabled: false), "network", "disabled icon")
+    }),
+    ("privileged helper launch policy requests approval or registration", {
+        try expectEqual(
+            PrivilegedHelperLaunchPolicy.action(for: PrivilegedHelperLaunchState(isEnabled: true, requiresApproval: false)),
+            .none,
+            "enabled helper should not prompt"
+        )
+        try expectEqual(
+            PrivilegedHelperLaunchPolicy.action(for: PrivilegedHelperLaunchState(isEnabled: false, requiresApproval: true)),
+            .openApprovalSettings,
+            "approval should open system settings"
+        )
+        try expectEqual(
+            PrivilegedHelperLaunchPolicy.action(for: PrivilegedHelperLaunchState(isEnabled: false, requiresApproval: false)),
+            .register,
+            "missing helper should be registered"
+        )
+        try expect(
+            PrivilegedHelperLaunchPolicy.shouldOpenApprovalAfterRegistration(
+                PrivilegedHelperLaunchState(isEnabled: false, requiresApproval: true)
+            ),
+            "approval should open after registration"
+        )
+    }),
+    ("privileged helper operation timeout policy prevents endless loading", {
+        try expect(
+            PrivilegedHelperOperationTimeoutPolicy.didTimeOut(elapsed: PrivilegedHelperOperationTimeoutPolicy.defaultTimeout),
+            "default timeout threshold should time out"
+        )
+        try expect(
+            !PrivilegedHelperOperationTimeoutPolicy.didTimeOut(elapsed: PrivilegedHelperOperationTimeoutPolicy.defaultTimeout - 0.1),
+            "operation should not time out before threshold"
+        )
     })
 ]
 

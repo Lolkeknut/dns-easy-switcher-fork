@@ -242,3 +242,45 @@ public struct DNSStatusIconPolicy {
         isEnabled ? "circle.fill" : "network"
     }
 }
+
+public struct PrivilegedHelperLaunchState: Equatable {
+    public var isEnabled: Bool
+    public var requiresApproval: Bool
+
+    public init(isEnabled: Bool, requiresApproval: Bool) {
+        self.isEnabled = isEnabled
+        self.requiresApproval = requiresApproval
+    }
+}
+
+public enum PrivilegedHelperLaunchAction: Equatable {
+    case none
+    case register
+    case openApprovalSettings
+}
+
+public struct PrivilegedHelperLaunchPolicy {
+    public static func action(for state: PrivilegedHelperLaunchState) -> PrivilegedHelperLaunchAction {
+        if state.isEnabled {
+            return .none
+        }
+
+        if state.requiresApproval {
+            return .openApprovalSettings
+        }
+
+        return .register
+    }
+
+    public static func shouldOpenApprovalAfterRegistration(_ state: PrivilegedHelperLaunchState) -> Bool {
+        !state.isEnabled && state.requiresApproval
+    }
+}
+
+public struct PrivilegedHelperOperationTimeoutPolicy {
+    public static let defaultTimeout: TimeInterval = 6
+
+    public static func didTimeOut(elapsed: TimeInterval, timeout: TimeInterval = defaultTimeout) -> Bool {
+        elapsed >= timeout
+    }
+}
